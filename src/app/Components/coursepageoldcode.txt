@@ -20,71 +20,40 @@ export default function CoursePage() {
     try {
       const jwt = Cookies.get("jwt");
 
-      // Optimized course query with selective population
-      const query = new URLSearchParams({
-        "populate[thumbnail]": "*",
-        "populate[previewVideo]": "*",
-        "populate[instructor]": "*",
-        "populate[category]": "*",
-        "fields[0]": "title",
-        "fields[1]": "shortDescription",
-        "fields[2]": "description",
-        "fields[3]": "durationHours",
-        "fields[4]": "rating",
-        "fields[5]": "students",
-        "fields[6]": "price",
-        "fields[7]": "isFree",
-        "fields[8]": "hasCertificate",
-        "fields[9]": "difficultyLevel",
-      }).toString();
-
-      const courseRes = await fetch(
+      const res = await fetch(
         `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
         {
           headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
         }
       );
 
-      if (!courseRes.ok) {
-        throw new Error(`Failed to fetch course: ${courseRes.status}`);
-      }
+      if (!res.ok) throw new Error(`Failed to fetch course: ${res.status}`);
 
-      const courseData = await courseRes.json();
+      const data = await res.json();
+      console.log("Course data from API:", data);
 
-      if (!courseData.data) {
+      if (!data.data || !data.data.length) {
         throw new Error("Course not found");
       }
 
-      setCourse({
-        ...courseData.data.attributes,
-        id: courseData.data.id,
-        price: courseData.data.attributes?.price || 0,
-      });
+      const raw = data.data[0];
+      const attributes = raw;
+      setCourse(attributes);
 
-      // Check enrollment if user is logged in
       if (jwt) {
-        const enrollmentQuery = new URLSearchParams({
-          "filters[course][id][$eq]": courseId,
-          "populate[0]": "course",
-        }).toString();
-
-        const userRes = await fetch(`http://localhost:1337/api/users/me`, {
+        const userRes = await fetch("http://localhost:1337/api/users/me", {
           headers: { Authorization: `Bearer ${jwt}` },
         });
-
-        if (!userRes.ok) {
-          throw new Error(`Failed to fetch user data: ${userRes.status}`);
-        }
+        if (!userRes.ok) throw new Error("Failed to fetch user");
 
         const userData = await userRes.json();
-
         setUser(userData);
-        setIsEnrolled(userData.enrolled_courses?.length > 0);
+        setIsEnrolled(userData.enrolled_courses?.includes(raw.id));
       }
 
       setIsLoading(false);
     } catch (err) {
-      console.error("Fetch error:", err);
+      console.error("Error:", err);
       setError(err.message);
       setIsLoading(false);
     }
@@ -92,128 +61,88 @@ export default function CoursePage() {
 
   useEffect(() => {
     if (!courseId) {
-      setError("Course ID is missing");
+      setError("Missing course ID");
       setIsLoading(false);
-      return;
+    } else {
+      fetchCourseData();
     }
-    fetchCourseData();
   }, [courseId]);
 
   const handleEnroll = async () => {
-    console.log("START handleEnroll");
-
-    // Check if course and courseId are properly defined
-    if (!courseId || !course || !course.id) {
-      toast.error("Course information missing or invalid.");
-      console.log("Missing or invalid course info updated", { courseId, course });
+    if (!course?.documentId || !user?.id) {
+      toast.error("Missing course or user info");
       return;
     }
 
-    console.log({ courseId, course, user });
-
-    // Ensure JWT is available for the request
     const jwt = Cookies.get("jwt");
-    console.log({ jwt });
-
     if (!jwt) {
-      toast.error("You must be logged in to enroll");
-      console.log("JWT missing, redirecting to login...");
-      router.push(
-        `/login?returnUrl=${encodeURIComponent(`/courses/${courseId}`)}`
-      );
+      router.push(`/login?returnUrl=/courses/${courseId}`);
       return;
     }
-
-    if (!user || !user.id) {
-      toast.error("User information missing. Please login again.");
-      console.log("User missing, redirecting to login...");
-      router.push(
-        `/login?returnUrl=${encodeURIComponent(`/courses/${courseId}`)}`
-      );
-      return;
-    }
-
-    // Check if it's a paid course
     if (course.price > 0) {
-      console.log("Paid course detected, redirecting to payment page...");
+      toast.info("Paid course detected, redirecting to payment page...");
       router.push(`/payment/${courseId}`);
       return;
     }
-
-    console.log("Everything OK, now enrolling...");
-
     setIsLoading(true);
 
     try {
-      // Prepare the enrollment request body
-      const enrollmentBody = {
-        data: {
-          users_permissions_users: user.id,
-          courses: course.id, // Ensure course.id is correctly set
-          enrolledAt: new Date().toISOString(),
+      const res = await fetch("http://localhost:1337/api/enrolled-courses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
         },
-      };
-
-      console.log("Enrollment request body:", enrollmentBody);
-
-      // Make the API request to enroll
-      const response = await fetch(
-        "http://localhost:1337/api/enrolled-courses",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${jwt}`,
+        body: JSON.stringify({
+          data: {
+            users_permissions_users: user.id,
+            courses: [course.documentId],
+            enrolledAt: new Date().toISOString(),
           },
-          body: JSON.stringify(enrollmentBody),
-        }
-      );
+        }),
+      });
 
-      // Parse the response
-      const result = await response.json();
-      console.log("Enrollment result:", result);
+      const result = await res.json();
+      if (!res.ok)
+        throw new Error(result.error?.message || "Enrollment failed");
 
-      // Check if the response is not OK
-      if (!response.ok) {
-        throw new Error(
-          result?.error?.message || "Enrollment failed. Try again."
-        );
-      }
-
-      // Notify the user of successful enrollment
-      toast.success("Successfully enrolled in the course!");
+      toast.success("Successfully enrolled!");
       setIsEnrolled(true);
-      fetchCourseData(); // Assuming this function updates the course data
-
-      // Redirect to the learning page after a short delay
-      setTimeout(() => {
-        router.push(`/learning/${courseId}`);
-      }, 2000); // 2 second delay
-    } catch (error) {
-      console.error("Enrollment error:", error);
-      toast.error(error.message || "Something went wrong during enrollment.");
+      fetchCourseData();
+    } catch (err) {
+      toast.error(err.message);
     } finally {
       setIsLoading(false);
     }
   };
 
+  if (isLoading) return <p className="text-center mt-10">Loading...</p>;
+  if (error) return <p className="text-center mt-10 text-red-600">{error}</p>;
+
+  const thumbnailUrl = course?.thumbnail?.url
+    ? `http://localhost:1337${course.thumbnail.url}`
+    : null;
+
+  const formatDate = (dateString) => {
+    const options = { year: "numeric", month: "long", day: "numeric" };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Course Header Section */}
+      {/* Header */}
       <div className="relative mb-12 mt-20">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl opacity-10"></div>
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl opacity-10 pointer-events-none" />
         <div className="relative bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
-          {course?.thumbnail?.data?.attributes?.url ? (
+          {thumbnailUrl ? (
             <img
-              src={`http://localhost:1337${course.thumbnail.data.attributes.url}`}
+              src={thumbnailUrl}
               alt={course.title}
-              className="w-full h-64 md:h-80 object-cover"
+              className="w-full h-64 object-cover"
             />
           ) : (
-            <div className="w-full h-64 md:h-80 bg-gradient-to-r from-blue-50 to-purple-50 flex items-center justify-center">
-              <span className="text-gray-400 text-lg">
-                No thumbnail available
-              </span>
+            <div className="w-full h-64 bg-gray-200 flex items-center justify-center">
+              <span className="text-gray-500">No thumbnail available</span>
             </div>
           )}
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6">
@@ -231,65 +160,107 @@ export default function CoursePage() {
           {/* Course Metadata */}
           <div className="flex flex-wrap gap-3 mb-8">
             <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-              {course?.category?.data?.attributes?.name || "Uncategorized"}
+              {course?.category || "Uncategorized"}
             </span>
             <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
               {course?.difficultyLevel || "All Levels"}
             </span>
-            {course?.isFree ? (
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
-                Free
-              </span>
-            ) : (
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
-                ${course?.price}
-              </span>
-            )}
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+              {course?.isFree ? "Free" : `$${course?.price}`}
+            </span>
             {course?.hasCertificate && (
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800">
-                Certificate
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                Certificate Available
               </span>
             )}
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800">
+              {course?.language?.toUpperCase() || "EN"}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-pink-100 text-pink-800">
+              {course?.durationHours || 0} hours
+            </span>
           </div>
 
-          {/* Preview Video */}
-          {course?.previewVideo?.data?.attributes?.url && (
-            <div className="mb-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                Preview Video
-              </h2>
-              <div className="aspect-w-16 aspect-h-9 rounded-xl overflow-hidden shadow-md bg-black">
-                <video
-                  controls
-                  className="w-full h-full object-contain"
-                  poster={
-                    course?.thumbnail?.data?.attributes?.url
-                      ? `http://localhost:1337${course.thumbnail.data.attributes.url}`
-                      : undefined
-                  }
-                >
-                  <source
-                    src={`http://localhost:1337${course.previewVideo.data.attributes.url}`}
-                    type="video/mp4"
-                  />
-                  Your browser does not support the video tag.
-                </video>
+          {/* Course Details */}
+          <div className="bg-white rounded-xl p-6 mb-8 shadow-sm border border-gray-100">
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">
+              Course Details
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Instructor
+                </h3>
+                <p className="text-gray-600">
+                  {course?.instructor || "Not specified"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Students
+                </h3>
+                <p className="text-gray-600">
+                  {course?.students || 0} enrolled
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Rating
+                </h3>
+                <div className="flex items-center">
+                  <span className="text-yellow-500 mr-1">⭐</span>
+                  <span>{course?.rating || 0}/5</span>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Level
+                </h3>
+                <p className="text-gray-600">
+                  {course?.difficultyLevel || "Not specified"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Published
+                </h3>
+                <p className="text-gray-600">
+                  {course?.publishedAt
+                    ? formatDate(course.publishedAt)
+                    : "Not available"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Last Updated
+                </h3>
+                <p className="text-gray-600">
+                  {course?.updatedAt
+                    ? formatDate(course.updatedAt)
+                    : "Not available"}
+                </p>
               </div>
             </div>
-          )}
+          </div>
 
-          {/* Course Description */}
+          {/* Description */}
           <div className="bg-white rounded-xl p-6 mb-8 shadow-sm border border-gray-100">
             <h2 className="text-2xl font-bold text-gray-800 mb-6">
               About This Course
             </h2>
-            <div className="prose max-w-none text-gray-600">
-              {course?.Description?.map((block, index) => (
-                <p key={index} className="mb-4">
-                  {block.children[0].text}
-                </p>
-              ))}
-            </div>
+            {Array.isArray(course?.description) ? (
+              <div className="prose max-w-none text-gray-600">
+                {course.description.map((block, index) => (
+                  <p key={index} className="mb-4">
+                    {block.children?.[0]?.text || JSON.stringify(block)}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-600">
+                {course?.description || "No description provided."}
+              </p>
+            )}
           </div>
         </div>
 
@@ -300,6 +271,11 @@ export default function CoursePage() {
               <h3 className="text-2xl font-bold text-gray-900">
                 {course?.isFree ? "Free" : `$${course?.price || 0}`}
               </h3>
+              {course?.discountedPrice && (
+                <span className="text-sm text-gray-500 line-through">
+                  ${course.discountedPrice}
+                </span>
+              )}
               {isEnrolled && (
                 <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-sm">
                   Enrolled
@@ -312,18 +288,18 @@ export default function CoursePage() {
                 onClick={handleEnroll}
                 disabled={isLoading}
                 className={`w-full py-3 ${
-                  course?.price > 0
-                    ? "bg-purple-600 hover:bg-purple-700"
-                    : "bg-blue-600 hover:bg-blue-700"
+                  course?.isFree
+                    ? "bg-blue-600 hover:bg-blue-700"
+                    : "bg-purple-600 hover:bg-purple-700"
                 } text-white rounded-lg font-medium transition mb-6 ${
-                  isLoading ? "opacity-70 cursor-not-allowed" : ""
+                  isLoading ? "opacity-70 cursor-not-allowed" : "cursor-pointer"
                 }`}
               >
                 {isLoading
                   ? "Processing..."
-                  : course?.price > 0
-                  ? `Enroll for $${course?.price}`
-                  : "Enroll Now"}
+                  : course?.isFree
+                  ? "Enroll for Free"
+                  : `Enroll for $${course?.price}`}
               </button>
             ) : (
               <button
@@ -335,66 +311,10 @@ export default function CoursePage() {
             )}
 
             <div className="space-y-5">
-              {/* Instructor Section */}
+              {/* Course Includes */}
               <div>
                 <h4 className="text-lg font-semibold text-gray-800 mb-2">
-                  Instructor
-                </h4>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
-                    {course?.instructor?.data?.attributes?.firstName?.charAt(
-                      0
-                    ) || "I"}
-                  </div>
-                  <div>
-                    <span className="text-gray-700 block">
-                      {course?.instructor?.data?.attributes?.firstName ||
-                        "Instructor"}
-                      {course?.instructor?.data?.attributes?.lastName &&
-                        ` ${course.instructor.data.attributes.lastName}`}
-                    </span>
-                    <span className="text-sm text-gray-500">
-                      Course Instructor
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Course Details */}
-              <div className="border-t border-gray-200 pt-4">
-                <h4 className="text-lg font-semibold text-gray-800 mb-2">
-                  Course Details
-                </h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-sm text-gray-500">Duration</div>
-                    <div className="font-medium">
-                      {course?.durationHours || 0} hours
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-500">Students</div>
-                    <div className="font-medium">{course?.students || 0}+</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-500">Language</div>
-                    <div className="font-medium">
-                      {course?.language?.toUpperCase() || "EN"}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-500">Rating</div>
-                    <div className="font-medium flex items-center">
-                      ⭐ {course?.rating || 0}/5
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Course Includes */}
-              <div className="border-t border-gray-200 pt-4">
-                <h4 className="text-lg font-semibold text-gray-800 mb-2">
-                  Course Includes
+                  This Course Includes
                 </h4>
                 <ul className="space-y-3">
                   <li className="flex items-start gap-2 text-gray-600">
@@ -412,8 +332,8 @@ export default function CoursePage() {
                       ></path>
                     </svg>
                     <span>
-                      <strong>{course?.durationHours || 0} hours</strong>{" "}
-                      on-demand video
+                      <strong>{course?.durationHours || 0} hours</strong> of
+                      content
                     </span>
                   </li>
                   {course?.hasCertificate && (
@@ -448,222 +368,47 @@ export default function CoursePage() {
                         d="M5 13l4 4L19 7"
                       ></path>
                     </svg>
-                    <span>Full lifetime access</span>
+                    <span>Lifetime access</span>
                   </li>
                 </ul>
+              </div>
+
+              {/* Additional Info */}
+              <div className="border-t border-gray-200 pt-4">
+                <h4 className="text-lg font-semibold text-gray-800 mb-2">
+                  Additional Information
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-sm text-gray-500">Course ID</div>
+                    <div className="font-medium text-sm">
+                      {course?.documentId}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Created</div>
+                    <div className="font-medium text-sm">
+                      {course?.createdAt ? formatDate(course.createdAt) : "N/A"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Category</div>
+                    <div className="font-medium text-sm">
+                      {course?.category}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Level</div>
+                    <div className="font-medium text-sm">
+                      {course?.difficultyLevel}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-
-///every thing is getting and working like course details etc
-
-"use client";
-import { useState, useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
-import Cookies from "js-cookie";
-import { toast } from "react-toastify";
-import "react-toastify/dist/ReactToastify.css";
-
-export default function CoursePage() {
-  const router = useRouter();
-  const params = useParams();
-  const [isLoading, setIsLoading] = useState(true);
-  const [course, setCourse] = useState(null);
-  const [error, setError] = useState(null);
-  const [user, setUser] = useState(null);
-  const [isEnrolled, setIsEnrolled] = useState(false);
-
-  const courseId = params?.courseId;
-
-  const fetchCourseData = async () => {
-    try {
-      const jwt = Cookies.get("jwt");
-
-      const res = await fetch(
-        `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
-        {
-          headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
-        }
-      );
-
-      if (!res.ok) throw new Error(`Failed to fetch course: ${res.status}`);
-
-      const data = await res.json();
-      console.log("Course data from API:", data);
-
-      if (!data.data || !data.data.length) {
-        throw new Error("Course not found");
-      }
-
-      const raw = data.data[0];
-      const attributes = raw;
-
-      setCourse(attributes);
-
-      if (jwt) {
-        const userRes = await fetch("http://localhost:1337/api/users/me", {
-          headers: { Authorization: `Bearer ${jwt}` },
-        });
-        if (!userRes.ok) throw new Error("Failed to fetch user");
-
-        const userData = await userRes.json();
-        setUser(userData);
-        setIsEnrolled(userData.enrolled_courses?.includes(raw.id));
-      }
-
-      setIsLoading(false);
-    } catch (err) {
-      console.error("Error:", err);
-      setError(err.message);
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!courseId) {
-      setError("Missing course ID");
-      setIsLoading(false);
-    } else {
-      fetchCourseData();
-    }
-  }, [courseId]);
-
-  const handleEnroll = async () => {
-    if (!course?.id || !user) {
-      toast.error("Missing course or user info");
-      return;
-    }
-
-    const jwt = Cookies.get("jwt");
-    if (!jwt) {
-      router.push(`/login?returnUrl=/courses/${courseId}`);
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const res = await fetch("http://localhost:1337/api/enrolled-courses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${jwt}`,
-        },
-        body: JSON.stringify({
-          data: {
-            users_permissions_users: user.id,
-            courses: course.id,
-            enrolledAt: new Date().toISOString(),
-          },
-        }),
-      });
-
-      const result = await res.json();
-      if (!res.ok)
-        throw new Error(result.error?.message || "Enrollment failed");
-
-      toast.success("Successfully enrolled!");
-      setIsEnrolled(true);
-      fetchCourseData();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  if (isLoading) return <p className="text-center mt-10">Loading...</p>;
-  if (error) return <p className="text-center mt-10 text-red-600">{error}</p>;
-
-  const thumbnailUrl = course?.thumbnail?.url
-    ? `http://localhost:1337${course.thumbnail.url}`
-    : null;
-
-  return (
-    <div className="container mx-auto px-4 py-8">
-      {/* Header */}
-      <div className="relative mb-12 mt-20">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl opacity-10" />
-        <div className="relative bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
-          {thumbnailUrl ? (
-            <img
-              src={thumbnailUrl}
-              alt={course.title}
-              className="w-full h-64 object-cover"
-            />
-          ) : (
-            <div className="w-full h-64 bg-gray-200 flex items-center justify-center">
-              <span className="text-gray-500">No thumbnail available</span>
-            </div>
-          )}
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6">
-            <h1 className="text-3xl font-bold text-white">{course?.title}</h1>
-            <p className="text-gray-200 mt-2">{course?.shortDescription}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Tags */}
-      <div className="flex flex-wrap gap-3 mb-8">
-        <span className="px-3 py-1 rounded-full text-sm bg-blue-100 text-blue-800">
-          {course?.category || "Uncategorized"}
-        </span>
-        <span className="px-3 py-1 rounded-full text-sm bg-purple-100 text-purple-800">
-          {course?.difficultyLevel || "All Levels"}
-        </span>
-        <span className="px-3 py-1 rounded-full text-sm bg-green-100 text-green-800">
-          {course?.isFree ? "Free" : `$${course?.price}`}
-        </span>
-        {course?.hasCertificate && (
-          <span className="px-3 py-1 rounded-full text-sm bg-yellow-100 text-yellow-800">
-            Certificate Available
-          </span>
-        )}
-      </div>
-
-      {/* Description */}
-      <div className="bg-white p-6 rounded-lg shadow border border-gray-200 mb-8">
-        <h2 className="text-2xl font-bold mb-4 text-gray-800">
-          About This Course
-        </h2>
-        {Array.isArray(course?.description) ? (
-          <ul className="list-disc ml-6 text-gray-700 space-y-2">
-            {course.description.map((item, i) => (
-              <li key={i}>{item?.text || JSON.stringify(item)}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-gray-700">
-            {course?.description || "No description provided."}
-          </p>
-        )}
-      </div>
-
-      {/* Instructor */}
-      <div className="bg-white p-6 rounded-lg shadow border border-gray-200 mb-8">
-        <h2 className="text-xl font-semibold text-gray-700 mb-2">Instructor</h2>
-        <p className="text-gray-600">{course?.instructor || "Not specified"}</p>
-      </div>
-
-      {/* Enroll Button */}
-      {!isEnrolled ? (
-        <button
-          onClick={handleEnroll}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-md shadow"
-        >
-          Enroll Now
-        </button>
-      ) : (
-        <p className="text-green-600 font-semibold">
-          You are enrolled in this course.
-        </p>
-      )}
     </div>
   );
 }

@@ -1,0 +1,722 @@
+//handle assignment py work krna rehta h
+
+"use client";
+import { useState, useEffect, useRef } from "react";
+import { useRouter, useParams } from "next/navigation";
+import Cookies from "js-cookie";
+import { toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import { jwtDecode } from "jwt-decode";
+import axios from "axios";
+
+export default function LearningPage(token, assignmentId) {
+  const router = useRouter();
+  const params = useParams();
+  const [isLoading, setIsLoading] = useState(true);
+  const [course, setCourse] = useState(null);
+  const [error, setError] = useState(null);
+  const [currentTab, setCurrentTab] = useState("videos");
+  const [submissionFile, setSubmissionFile] = useState(null);
+  const [submissionText, setSubmissionText] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [videoProgress, setVideoProgress] = useState({});
+  const [review, setReview] = useState({ rating: 5, comment: "" });
+  const [userSubmissions, setUserSubmissions] = useState([]);
+  const [showCertificate, setShowCertificate] = useState(false);
+  const [isEnrolled, setIsEnrolled] = useState(true);
+  const [user, setUser] = useState(null);
+
+  const [selectedFile, setSelectedFile] = useState(null);
+  const videoRefs = useRef({});
+
+  const courseId = params?.courseId;
+
+  // Load video progress from cookies on initial render
+  useEffect(() => {
+    const savedProgress = Cookies.get(`course_${courseId}_progress`);
+    if (savedProgress) {
+      setVideoProgress(JSON.parse(savedProgress));
+    }
+  }, [courseId]);
+
+  // Save video progress to cookies whenever it changes
+  useEffect(() => {
+    if (Object.keys(videoProgress).length > 0) {
+      Cookies.set(
+        `course_${courseId}_progress`,
+        JSON.stringify(videoProgress),
+        {
+          expires: 30, // 30 days
+        }
+      );
+    }
+  }, [videoProgress, courseId]);
+
+  const fetchCourseData = async () => {
+    try {
+      const jwt = Cookies.get("jwt");
+      const token = Cookies.get("token");
+      let decodedUser = null;
+
+      if (token) {
+        try {
+          decodedUser = jwtDecode(token);
+          setUser(decodedUser);
+        } catch (e) {
+          console.error("Error decoding token:", e);
+        }
+      }
+
+      // Fetch course data
+      const res = await fetch(
+        `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
+        {
+          headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
+        }
+      );
+
+      if (!res.ok) throw new Error(`Failed to fetch course: ${res.status}`);
+
+      const data = await res.json();
+      console.log("Course data from API:", data);
+
+      if (!data || data.data.length === 0) {
+        throw new Error("Course not found");
+      }
+
+      const courseData = data.data[0];
+      setCourse(courseData);
+
+      // Fetch user submissions if logged in
+      if (jwt && decodedUser?.id) {
+        const submissionsRes = await fetch(
+          `http://localhost:1337/api/submissions?filters[user][id][$eq]=${decodedUser.id}&filters[course][id][$eq]=${courseId}&populate=assignment`,
+          {
+            headers: { Authorization: `Bearer ${jwt}` },
+          }
+        );
+
+        if (submissionsRes.ok) {
+          const submissionsData = await submissionsRes.json();
+          setUserSubmissions(submissionsData.data || []);
+        }
+      }
+
+      setIsLoading(false);
+    } catch (err) {
+      console.error("Error:", err);
+      setError(err.message);
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    setSubmissionFile(e.target.files[0]);
+  };
+
+  async function handleSubmitAssignment(
+    userId,
+    assignmentId,
+    textSubmission,
+    file,
+    onSuccess,
+    onError
+  ) {
+    const formData = new FormData();
+
+    // 1. Add file if it exists
+    if (file) {
+      formData.append("files.file", file);
+    }
+
+    // 2. Create the data object with proper structure
+    const submissionData = {
+      data: {
+        users_permissions_users: userId,
+        file: file,
+        assignment: assignmentId,
+        textSubmission: textSubmission || "",
+        submissionDate: new Date().toISOString(),
+      },
+    };
+
+    // 3. Append the data as JSON string
+    formData.append("data", JSON.stringify(submissionData.data));
+
+    // 4. Add authentication token
+    const token = Cookies.get("jwt");
+    if (!token) {
+      const error = new Error("No authentication token found");
+      if (onError) onError(error);
+      throw error;
+    }
+
+    try {
+      const response = await fetch("http://localhost:1337/api/submissions", {
+        method: "POST",
+        body: formData.data,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Strapi Error Details:", errorData);
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (onSuccess) onSuccess(data);
+      return data;
+    } catch (error) {
+      console.error("Submission Error:", error);
+      if (onError) onError(error);
+      throw error;
+    }
+  }
+  const handleVideoProgress = (videoId, currentTime, duration) => {
+    const progressPercentage = (currentTime / duration) * 100;
+
+    // Update local state
+    setVideoProgress((prev) => ({
+      ...prev,
+      [videoId]: progressPercentage,
+    }));
+
+    // Calculate overall course progress
+    const totalVideos = course.videos.length;
+    const completedVideos = Object.values({
+      ...videoProgress,
+      [videoId]: progressPercentage,
+    }).filter((p) => p >= 90).length;
+
+    const newProgress = Math.round((completedVideos / totalVideos) * 100);
+    setProgress(newProgress);
+  };
+
+  const submitReview = async () => {
+    try {
+      const jwt = Cookies.get("jwt");
+      const token = Cookies.get("token");
+      const decodedUser = token ? jwtDecode(token) : null;
+
+      if (!jwt || !decodedUser?.id) {
+        toast.error("Please login to submit review");
+        return;
+      }
+
+      const res = await fetch("http://localhost:1337/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({
+          data: {
+            rating: review.rating,
+            comment: review.comment,
+            users_permissions_users: decodedUser.id,
+            course: course.documentId,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to submit review");
+      }
+
+      toast.success("Review submitted successfully!");
+      setReview({ rating: 5, comment: "" });
+    } catch (err) {
+      console.error("Review submission error:", err);
+      toast.error(err.message);
+    }
+  };
+
+  const generateCertificate = () => {
+    setShowCertificate(true);
+    toast.success(
+      "Certificate generated! Download would be available in a real implementation."
+    );
+  };
+
+  useEffect(() => {
+    if (!courseId) {
+      setError("Missing course ID");
+      setIsLoading(false);
+    } else {
+      fetchCourseData();
+    }
+  }, [courseId]);
+
+  // Calculate initial progress when videoProgress or course changes
+  useEffect(() => {
+    if (course?.videos) {
+      const totalVideos = course.videos.length;
+      const completedVideos = Object.values(videoProgress).filter(
+        (p) => p >= 90
+      ).length;
+      const newProgress = Math.round((completedVideos / totalVideos) * 100);
+      setProgress(newProgress);
+    }
+  }, [videoProgress, course]);
+
+  if (isLoading)
+    return <div className="text-center mt-10">Loading course content...</div>;
+  if (error)
+    return <div className="text-center mt-10 text-red-600">{error}</div>;
+  if (!course) return <div className="text-center mt-10">Course not found</div>;
+
+  return (
+    <div className="container mx-auto px-4 py-8">
+      <div className="flex flex-col md:flex-row gap-8 mt-20">
+        {/* Course Info Sidebar */}
+        <div className="w-full md:w-1/4 bg-white p-6 rounded-lg shadow">
+          <div className="mb-6">
+            {course.thumbnail?.url && (
+              <img
+                src={`http://localhost:1337${course.thumbnail.url}`}
+                alt={course.title}
+                className="w-full h-auto rounded-lg mb-4"
+              />
+            )}
+            <h1 className="text-2xl font-bold mb-2">{course.title}</h1>
+            <p className="text-gray-600 mb-4">{course.shortDescription}</p>
+
+            {/* Progress Bar */}
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm font-medium text-gray-700">
+                  Progress
+                </span>
+                <span className="text-sm text-gray-500">{progress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <div
+                  className="bg-blue-600 h-2.5 rounded-full"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="flex items-center mb-2">
+              <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                {course.difficultyLevel}
+              </span>
+              <span className="ml-2 text-gray-600">
+                {course.students} students
+              </span>
+            </div>
+            <div className="flex items-center">
+              <span className="text-yellow-500">★ {course.rating}</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <button
+              onClick={() => setCurrentTab("videos")}
+              className={`w-full text-left px-4 py-2 rounded ${
+                currentTab === "videos"
+                  ? "bg-blue-100 text-blue-700"
+                  : "hover:bg-gray-100"
+              }`}
+            >
+              Videos ({course.videos?.length || 0})
+            </button>
+            {course.readings && course.readings.length > 0 && (
+              <button
+                onClick={() => setCurrentTab("readings")}
+                className={`w-full text-left px-4 py-2 rounded ${
+                  currentTab === "readings"
+                    ? "bg-blue-100 text-blue-700"
+                    : "hover:bg-gray-100"
+                }`}
+              >
+                Readings ({course.readings.length})
+              </button>
+            )}
+            {course.assignments && course.assignments.length > 0 && (
+              <button
+                onClick={() => setCurrentTab("assignments")}
+                className={`w-full text-left px-4 py-2 rounded ${
+                  currentTab === "assignments"
+                    ? "bg-blue-100 text-blue-700"
+                    : "hover:bg-gray-100"
+                }`}
+              >
+                Assignments ({course.assignments.length})
+              </button>
+            )}
+            <button
+              onClick={() => setCurrentTab("review")}
+              className={`w-full text-left px-4 py-2 rounded ${
+                currentTab === "review"
+                  ? "bg-blue-100 text-blue-700"
+                  : "hover:bg-gray-100"
+              }`}
+            >
+              Leave Review
+            </button>
+          </div>
+
+          {/* Certificate Section */}
+          {progress === 100 && course.hasCertificate && (
+            <div className="mt-6 p-4 bg-green-50 rounded-lg border border-green-200">
+              <h3 className="font-medium text-green-800 mb-2">
+                Course Completed!
+              </h3>
+              <button
+                onClick={generateCertificate}
+                className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              >
+                Download Certificate
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Main Content */}
+        <div className="w-full md:w-3/4 bg-white p-6 rounded-lg shadow">
+          {currentTab === "videos" && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">Course Videos</h2>
+              {course.videos && course.videos.length > 0 ? (
+                <div className="space-y-6">
+                  {course.videos.map((video) => (
+                    <div key={video.id} className="mb-6">
+                      <div className="aspect-w-16 aspect-h-9 bg-black rounded-lg overflow-hidden">
+                        <video
+                          ref={(el) => (videoRefs.current[video.id] = el)}
+                          controls
+                          className="w-full"
+                          onTimeUpdate={() => {
+                            const videoEl = videoRefs.current[video.id];
+                            if (videoEl) {
+                              handleVideoProgress(
+                                video.id,
+                                videoEl.currentTime,
+                                videoEl.duration
+                              );
+                            }
+                          }}
+                        >
+                          <source
+                            src={`http://localhost:1337${video.url}`}
+                            type="video/mp4"
+                          />
+                          Your browser does not support the video tag.
+                        </video>
+                      </div>
+                      <div className="flex justify-between items-center mt-2">
+                        <h3 className="text-lg font-semibold">{video.name}</h3>
+                        <div className="flex items-center">
+                          <span className="text-sm text-gray-500 mr-2">
+                            {Math.round(videoProgress[video.id] || 0)}% watched
+                          </span>
+                          {videoProgress[video.id] >= 90 && (
+                            <span className="text-sm text-green-600">
+                              ✓ Completed
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {video.caption && (
+                        <p className="text-gray-600">{video.caption}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500">
+                  No videos available for this course.
+                </p>
+              )}
+            </div>
+          )}
+
+          {currentTab === "readings" && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">Course Readings</h2>
+              {course.readings && course.readings.length > 0 ? (
+                <div className="space-y-4">
+                  {course.readings.map((reading, index) => (
+                    <div
+                      key={index}
+                      className="p-4 border border-gray-200 rounded-lg"
+                    >
+                      <p className="text-gray-700">
+                        {reading.children?.[0]?.text || "No content"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500">
+                  No readings available for this course.
+                </p>
+              )}
+            </div>
+          )}
+
+          {currentTab === "assignments" && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">Course Assignments</h2>
+              {course.assignments && course.assignments.length > 0 ? (
+                <div className="space-y-6">
+                  {course.assignments.map((assignment) => {
+                    const userSubmission = userSubmissions.find(
+                      (sub) =>
+                        sub.attributes?.assignment?.data?.id === assignment.id
+                    );
+
+                    return (
+                      <div
+                        key={assignment.id}
+                        className="p-4 border border-gray-200 rounded-lg"
+                      >
+                        <div className="flex justify-between items-start mb-4">
+                          <div>
+                            <h3 className="text-lg font-semibold">
+                              {assignment.title}
+                            </h3>
+                            <p className="text-gray-600">
+                              {assignment.description}
+                            </p>
+                            {assignment.dueDate && (
+                              <p className="text-sm text-gray-500 mt-1">
+                                Due:{" "}
+                                {new Date(
+                                  assignment.dueDate
+                                ).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                          {assignment.url && (
+                            <button
+                              onClick={() =>
+                                window.open(
+                                  `http://localhost:1337${assignment.url}`,
+                                  "_blank"
+                                )
+                              }
+                              className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-lg shadow hover:from-blue-700 hover:to-blue-600 transition-all duration-300 text-sm md:text-base"
+                            >
+                              <svg
+                                className="w-5 h-5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                                />
+                              </svg>
+                              <span>Download Assignment</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Submission Status */}
+                        {userSubmission ? (
+                          <div className="mt-4 p-3 bg-green-50 rounded border border-green-200">
+                            <h4 className="font-medium text-green-800 mb-1">
+                              ✓ Submitted on{" "}
+                              {new Date(
+                                userSubmission.attributes.submissionDate
+                              ).toLocaleDateString()}
+                            </h4>
+                            {userSubmission.attributes.textSubmission && (
+                              <p className="text-gray-700 mb-2">
+                                {userSubmission.attributes.textSubmission}
+                              </p>
+                            )}
+                            {userSubmission.attributes.submissionFile?.data
+                              ?.attributes?.url && (
+                              <a
+                                href={`http://localhost:1337${userSubmission.attributes.submissionFile.data.attributes.url}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center text-blue-600 hover:underline"
+                              >
+                                <svg
+                                  className="w-4 h-4 mr-1"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                                  ></path>
+                                </svg>
+                                View Submitted File
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h4 className="font-medium mb-3">
+                              Submit Your Assignment
+                            </h4>
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  File Submission (PDF, DOC, ZIP)
+                                </label>
+                                <input
+                                  type="file"
+                                  onChange={handleFileChange}
+                                  className="block w-full text-sm text-gray-500
+                                    file:mr-4 file:py-2 file:px-4
+                                    file:rounded-md file:border-0
+                                    file:text-sm file:font-semibold
+                                    file:bg-blue-50 file:text-blue-700
+                                    hover:file:bg-blue-100"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  Or Text Submission
+                                </label>
+                                <textarea
+                                  value={submissionText}
+                                  onChange={(e) =>
+                                    setSubmissionText(e.target.value)
+                                  }
+                                  rows="4"
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                  placeholder="Type your submission here..."
+                                ></textarea>
+                              </div>
+                              <button
+                                onClick={() =>
+                                  handleSubmitAssignment(assignment.id)
+                                }
+                                disabled={isSubmitting}
+                                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isSubmitting
+                                  ? "Submitting..."
+                                  : "Submit Assignment"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-gray-500">
+                  No assignments available for this course.
+                </p>
+              )}
+            </div>
+          )}
+
+          {currentTab === "review" && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">Leave a Review</h2>
+              <div className="max-w-lg">
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Rating
+                  </label>
+                  <div className="flex items-center">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        onClick={() => setReview({ ...review, rating: star })}
+                        className="text-2xl focus:outline-none"
+                      >
+                        {star <= review.rating ? "★" : "☆"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Your Review
+                  </label>
+                  <textarea
+                    value={review.comment}
+                    onChange={(e) =>
+                      setReview({ ...review, comment: e.target.value })
+                    }
+                    rows="4"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Share your experience with this course..."
+                  ></textarea>
+                </div>
+                <button
+                  onClick={submitReview}
+                  disabled={!review.comment.trim()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Submit Review
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Certificate Modal */}
+          {showCertificate && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white p-8 rounded-lg max-w-2xl w-full">
+                <div className="text-center">
+                  <h2 className="text-2xl font-bold mb-4">
+                    Course Completion Certificate
+                  </h2>
+                  <div className="border-2 border-blue-200 p-6 mb-6">
+                    <h3 className="text-xl font-semibold mb-2">
+                      {course.title}
+                    </h3>
+                    <p className="text-gray-600 mb-4">
+                      Awarded to: {user?.username || "User"}
+                    </p>
+                    <p className="text-gray-700">
+                      Completed on: {new Date().toLocaleDateString()}
+                    </p>
+                    <div className="mt-6 flex justify-center">
+                      <div className="border-t-2 border-blue-300 w-32 pt-2 text-blue-600">
+                        Certificate ID:{" "}
+                        {Math.random()
+                          .toString(36)
+                          .substring(2, 10)
+                          .toUpperCase()}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex justify-center space-x-4">
+                    <button
+                      onClick={() => setShowCertificate(false)}
+                      className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => {
+                        toast.success("Certificate download started!");
+                        setShowCertificate(false);
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                    >
+                      Download PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

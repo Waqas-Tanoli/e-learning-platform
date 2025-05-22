@@ -13,6 +13,7 @@ export default function CoursePage() {
   const [error, setError] = useState(null);
   const [user, setUser] = useState(null);
   const [isEnrolled, setIsEnrolled] = useState(false);
+  const [shouldRedirect, setShouldRedirect] = useState(false);
 
   const courseId = params?.courseId;
 
@@ -20,35 +21,62 @@ export default function CoursePage() {
     try {
       const jwt = Cookies.get("jwt");
 
-      const res = await fetch(
+      // Fetch course data
+      const courseRes = await fetch(
         `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
         {
           headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
         }
       );
 
-      if (!res.ok) throw new Error(`Failed to fetch course: ${res.status}`);
+      if (!courseRes.ok)
+        throw new Error(`Failed to fetch course: ${courseRes.status}`);
 
-      const data = await res.json();
-      console.log("Course data from API:", data);
+      const courseData = await courseRes.json();
+      console.log("Course data from API:", courseData);
 
-      if (!data.data || !data.data.length) {
+      if (!courseData.data) {
         throw new Error("Course not found");
       }
 
-      const raw = data.data[0];
+      // Extract attributes from the nested structure
+      const raw = courseData.data[0];
       const attributes = raw;
       setCourse(attributes);
 
+      // Fetch user enrollment status if logged in
       if (jwt) {
-        const userRes = await fetch("http://localhost:1337/api/users/me", {
-          headers: { Authorization: `Bearer ${jwt}` },
-        });
-        if (!userRes.ok) throw new Error("Failed to fetch user");
+        try {
+          // First get the user ID
+          const userRes = await fetch(
+            "http://localhost:1337/api/users/me?populate=*",
+            {
+              headers: { Authorization: `Bearer ${jwt}` },
+            }
+          );
 
-        const userData = await userRes.json();
-        setUser(userData);
-        setIsEnrolled(userData.enrolled_courses?.includes(raw.id));
+          if (!userRes.ok) throw new Error("Failed to fetch user data");
+
+          const userData = await userRes.json();
+          setUser(userData);
+
+          // Then check if user is enrolled in this course
+          const enrollmentRes = await fetch(
+            `http://localhost:1337/api/enrolled-courses?filters[users_permissions_users][id][$eq]=${userData.id}&filters[courses][id][$eq]=${courseId}`
+          );
+
+          if (!enrollmentRes.ok) throw new Error("Failed to check enrollment");
+
+          const enrollmentData = await enrollmentRes.json();
+          const enrolled = enrollmentData.data.length > 0;
+          setIsEnrolled(enrolled);
+
+          if (enrolled) {
+            setShouldRedirect(true);
+          }
+        } catch (err) {
+          console.error("Error fetching user enrollment:", err);
+        }
       }
 
       setIsLoading(false);
@@ -68,8 +96,14 @@ export default function CoursePage() {
     }
   }, [courseId]);
 
+  useEffect(() => {
+    if (shouldRedirect) {
+      router.push(`/learning/${courseId}`);
+    }
+  }, [shouldRedirect, courseId, router]);
+
   const handleEnroll = async () => {
-    if (!course?.documentId || !user?.id) {
+    if (!course?.id || !user?.id) {
       toast.error("Missing course or user info");
       return;
     }
@@ -79,11 +113,13 @@ export default function CoursePage() {
       router.push(`/login?returnUrl=/courses/${courseId}`);
       return;
     }
+
     if (course.price > 0) {
       toast.info("Paid course detected, redirecting to payment page...");
       router.push(`/payment/${courseId}`);
       return;
     }
+
     setIsLoading(true);
 
     try {
@@ -103,12 +139,12 @@ export default function CoursePage() {
       });
 
       const result = await res.json();
-      if (!res.ok)
+      if (!res.ok) {
         throw new Error(result.error?.message || "Enrollment failed");
+      }
 
       toast.success("Successfully enrolled!");
-      setIsEnrolled(true);
-      fetchCourseData();
+      setShouldRedirect(true);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -118,6 +154,7 @@ export default function CoursePage() {
 
   if (isLoading) return <p className="text-center mt-10">Loading...</p>;
   if (error) return <p className="text-center mt-10 text-red-600">{error}</p>;
+  if (shouldRedirect) return null;
 
   const thumbnailUrl = course?.thumbnail?.url
     ? `http://localhost:1337${course.thumbnail.url}`
@@ -138,10 +175,10 @@ export default function CoursePage() {
             <img
               src={thumbnailUrl}
               alt={course.title}
-              className="w-full h-64 object-cover"
+              className="w-full h-64 md:h-80 object-cover"
             />
           ) : (
-            <div className="w-full h-64 bg-gray-200 flex items-center justify-center">
+            <div className="w-full h-64 md:h-80 bg-gray-200 flex items-center justify-center">
               <span className="text-gray-500">No thumbnail available</span>
             </div>
           )}
@@ -192,7 +229,8 @@ export default function CoursePage() {
                   Instructor
                 </h3>
                 <p className="text-gray-600">
-                  {course?.instructor || "Not specified"}
+                  {course?.instructor?.firstName || "Not specified"}{" "}
+                  {course?.instructor?.lastName || ""}
                 </p>
               </div>
               <div>
@@ -303,7 +341,7 @@ export default function CoursePage() {
               </button>
             ) : (
               <button
-                onClick={() => router.push(`/learning/${courseId}`)}
+                onClick={() => setShouldRedirect(true)}
                 className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition mb-6"
               >
                 Continue Learning

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   FaSearch,
@@ -9,20 +9,60 @@ import {
   FaUserGraduate,
   FaChalkboardTeacher,
   FaUserCircle,
+  FaSignOutAlt,
 } from "react-icons/fa";
+import Cookies from "js-cookie";
 
 const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [user, setUser] = useState(null);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filters, setFilters] = useState({
+    category: "",
+    level: "",
+    price: "",
+  });
+  const [showFilters, setShowFilters] = useState(false);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 9,
+    pageCount: 1,
+    total: 0,
+  });
   const pathname = usePathname();
+  const router = useRouter();
 
   useEffect(() => {
+    // Get user data from cookies
+    const userData = Cookies.get("user");
+    if (userData) {
+      setUser(JSON.parse(userData));
+    }
+
     const handleScroll = () => {
       setScrolled(window.scrollY > 10);
     };
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  const handleLogout = () => {
+    Cookies.remove("user");
+    Cookies.remove("jwt");
+    Cookies.remove("userId");
+    Cookies.remove("token");
+    setUser(null);
+
+    setUserDropdownOpen(false);
+    setMobileMenuOpen(false);
+    // Refresh the page
+    router.refresh();
+  };
 
   const navLinks = [
     { name: "Courses", href: "/courses", icon: <FaBookOpen /> },
@@ -32,6 +72,11 @@ const Header = () => {
       href: "/instructors",
       icon: <FaChalkboardTeacher />,
     },
+  ];
+
+  const userDropdownLinks = [
+    { name: "View Profile", href: "/profile", icon: <FaUserCircle /> },
+    { name: "All Courses", href: "/courses", icon: <FaBookOpen /> },
   ];
 
   return (
@@ -81,26 +126,67 @@ const Header = () => {
               <FaSearch className="absolute left-3 top-3 text-gray-400" />
             </div>
 
-            <div className="flex space-x-3">
-              <Link
-                href="/instructorSignUp"
-                className="px-4 py-2 rounded-lg font-medium text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors"
-              >
-                Teach on EduLearn
-              </Link>
-              <Link
-                href="/login"
-                className="px-4 py-2 rounded-lg font-medium text-purple-600 hover:bg-purple-50 transition-colors"
-              >
-                Log In
-              </Link>
-              <Link
-                href="/register"
-                className="px-4 py-2 rounded-lg font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 transition-all shadow-md"
-              >
-                Sign Up
-              </Link>
-            </div>
+            {!user ? (
+              <div className="flex space-x-3">
+                <Link
+                  href="/instructorSignUp"
+                  className="px-4 py-2 rounded-lg font-medium text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors"
+                >
+                  Teach on EduLearn
+                </Link>
+                <Link
+                  href="/login"
+                  className="px-4 py-2 rounded-lg font-medium text-purple-600 hover:bg-purple-50 transition-colors"
+                >
+                  Log In
+                </Link>
+                <Link
+                  href="/register"
+                  className="px-4 py-2 rounded-lg font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 transition-all shadow-md"
+                >
+                  Sign Up
+                </Link>
+              </div>
+            ) : (
+              <div className="relative">
+                <button
+                  className="flex items-center space-x-2 focus:outline-none"
+                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                >
+                  <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
+                    <FaUserCircle className="text-purple-600 text-xl" />
+                  </div>
+                  <span className="font-medium text-gray-700">
+                    {user.name || "My Account"}
+                  </span>
+                </button>
+
+                {userDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg py-1 z-50">
+                    {userDropdownLinks.map((link) => (
+                      <Link
+                        key={link.name}
+                        href={link.href}
+                        className="flex items-center px-4 py-2 text-gray-700 hover:bg-purple-50 hover:text-purple-600"
+                        onClick={() => setUserDropdownOpen(false)}
+                      >
+                        <span className="mr-3">{link.icon}</span>
+                        {link.name}
+                      </Link>
+                    ))}
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center px-4 py-2 text-gray-700 hover:bg-purple-50 hover:text-purple-600"
+                    >
+                      <span className="mr-3">
+                        <FaSignOutAlt />
+                      </span>
+                      Log Out
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -164,29 +250,65 @@ const Header = () => {
               ))}
             </nav>
 
-            <div className="flex flex-col space-y-2 pt-2 border-t border-gray-200">
-              <Link
-                href="/instructorSignUp"
-                className="px-4 py-2 rounded-lg font-medium text-center text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors"
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Become an Instructor
-              </Link>
-              <Link
-                href="/login"
-                className="px-4 py-2 rounded-lg font-medium text-center text-purple-600 hover:bg-purple-50 transition-colors"
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Log In
-              </Link>
-              <Link
-                href="/register"
-                className="px-4 py-2 rounded-lg font-medium text-center text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 transition-all"
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Sign Up
-              </Link>
-            </div>
+            {!user ? (
+              <div className="flex flex-col space-y-2 pt-2 border-t border-gray-200">
+                <Link
+                  href="/instructorSignUp"
+                  className="px-4 py-2 rounded-lg font-medium text-center text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Become an Instructor
+                </Link>
+                <Link
+                  href="/login"
+                  className="px-4 py-2 rounded-lg font-medium text-center text-purple-600 hover:bg-purple-50 transition-colors"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Log In
+                </Link>
+                <Link
+                  href="/register"
+                  className="px-4 py-2 rounded-lg font-medium text-center text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 transition-all"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Sign Up
+                </Link>
+              </div>
+            ) : (
+              <div className="flex flex-col space-y-2 pt-2 border-t border-gray-200">
+                <div className="flex items-center space-x-3 px-4 py-2">
+                  <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
+                    <FaUserCircle className="text-purple-600 text-xl" />
+                  </div>
+                  <span className="font-medium">
+                    {user.name || "My Account"}
+                  </span>
+                </div>
+                {userDropdownLinks.map((link) => (
+                  <Link
+                    key={link.name}
+                    href={link.href}
+                    className="flex items-center space-x-3 px-4 py-2 rounded-lg text-gray-700 hover:bg-purple-50 hover:text-purple-600"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    <span className="text-lg">{link.icon}</span>
+                    <span>{link.name}</span>
+                  </Link>
+                ))}
+                <button
+                  onClick={() => {
+                    handleLogout();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex items-center space-x-3 px-4 py-2 rounded-lg text-gray-700 hover:bg-purple-50 hover:text-purple-600"
+                >
+                  <span className="text-lg">
+                    <FaSignOutAlt />
+                  </span>
+                  <span>Log Out</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
