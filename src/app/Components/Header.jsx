@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   FaSearch,
@@ -10,16 +10,18 @@ import {
   FaChalkboardTeacher,
   FaUserCircle,
   FaSignOutAlt,
+  FaFilter,
+  FaTimes,
 } from "react-icons/fa";
 import Cookies from "js-cookie";
+import axios from "axios";
 
 const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
-  const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [filters, setFilters] = useState({
@@ -28,17 +30,13 @@ const Header = () => {
     price: "",
   });
   const [showFilters, setShowFilters] = useState(false);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: 9,
-    pageCount: 1,
-    total: 0,
-  });
+  const [searchResults, setSearchResults] = useState([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    // Get user data from cookies
     const userData = Cookies.get("user");
     if (userData) {
       setUser(JSON.parse(userData));
@@ -51,17 +49,99 @@ const Header = () => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      if (searchTerm.trim() !== "") {
+        fetchCourses();
+      } else {
+        setSearchResults([]);
+        setShowSearchResults(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchTerm, filters]);
+
+  const fetchCourses = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const params = {
+        "pagination[page]": 1,
+        "pagination[pageSize]": 5,
+        "populate[thumbnail]": true,
+        publicationState: "live",
+      };
+
+      if (searchTerm) params["filters[title][$containsi]"] = searchTerm;
+      if (filters.category) params["filters[category][$eq]"] = filters.category;
+      if (filters.level) params["filters[level][$eq]"] = filters.level;
+      if (filters.price === "isFree") params["filters[isFree][$eq]"] = true;
+      if (filters.price === "paid") params["filters[isFree][$eq]"] = false;
+
+      const response = await axios.get("http://localhost:1337/api/courses", {
+        params,
+      });
+
+      setSearchResults(response.data.data);
+      setShowSearchResults(true);
+      console.log(response);
+    } catch (err) {
+      setError(err.response?.data?.error?.message || "Failed to fetch courses");
+      console.error("Error fetching courses:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    if (searchTerm.trim() !== "") {
+      const queryParams = new URLSearchParams();
+      queryParams.set("search", searchTerm);
+
+      if (filters.category) queryParams.set("category", filters.category);
+      if (filters.level) queryParams.set("level", filters.level);
+      if (filters.price) queryParams.set("price", filters.price);
+
+      router.push(`/courses?${queryParams.toString()}`);
+      setShowSearchResults(false);
+      setSearchTerm("");
+    }
+  };
+
+  const handleViewAllResults = () => {
+    const queryParams = new URLSearchParams();
+    queryParams.set("search", searchTerm);
+
+    if (filters.category) queryParams.set("category", filters.category);
+    if (filters.level) queryParams.set("level", filters.level);
+    if (filters.price) queryParams.set("price", filters.price);
+
+    router.push(`/courses?${queryParams.toString()}`);
+    setShowSearchResults(false);
+    setSearchTerm("");
+    setMobileMenuOpen(false);
+  };
+
   const handleLogout = () => {
     Cookies.remove("user");
     Cookies.remove("jwt");
     Cookies.remove("userId");
     Cookies.remove("token");
     setUser(null);
-
     setUserDropdownOpen(false);
     setMobileMenuOpen(false);
-    // Refresh the page
     router.refresh();
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      category: "",
+      level: "",
+      price: "",
+    });
   };
 
   const navLinks = [
@@ -118,12 +198,144 @@ const Header = () => {
           {/* Search and Auth Buttons - Desktop */}
           <div className="hidden md:flex items-center space-x-4">
             <div className="relative">
-              <input
-                type="text"
-                placeholder="Search courses..."
-                className="pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-64"
-              />
-              <FaSearch className="absolute left-3 top-3 text-gray-400" />
+              <form onSubmit={handleSearchSubmit} className="relative">
+                <input
+                  type="text"
+                  placeholder="Search courses..."
+                  className="pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-64"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onFocus={() => searchTerm && setShowSearchResults(true)}
+                  onBlur={() =>
+                    setTimeout(() => setShowSearchResults(false), 200)
+                  }
+                />
+                <FaSearch className="absolute left-3 top-3 text-gray-400" />
+                <button
+                  type="button"
+                  className="absolute right-3 top-3 text-gray-400 hover:text-purple-500"
+                  onClick={() => setShowFilters(!showFilters)}
+                >
+                  <FaFilter />
+                </button>
+              </form>
+
+              {/* Filter Dropdown */}
+              {showFilters && (
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg py-2 px-4 z-50">
+                  <div className="flex justify-between items-center mb-2">
+                    <h3 className="font-medium">Filters</h3>
+                    <button
+                      onClick={clearFilters}
+                      className="text-xs text-purple-600 hover:underline"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Category
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.category}
+                        onChange={(e) =>
+                          setFilters({ ...filters, category: e.target.value })
+                        }
+                      >
+                        <option value="">All Categories</option>
+                        <option value="web-development">Web Development</option>
+                        <option value="data-science">Data Science</option>
+                        <option value="business">Business</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Level
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.level}
+                        onChange={(e) =>
+                          setFilters({ ...filters, level: e.target.value })
+                        }
+                      >
+                        <option value="">All Levels</option>
+                        <option value="beginner">Beginner</option>
+                        <option value="intermediate">Intermediate</option>
+                        <option value="advanced">Advanced</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Price
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.price}
+                        onChange={(e) =>
+                          setFilters({ ...filters, price: e.target.value })
+                        }
+                      >
+                        <option value="">All Prices</option>
+                        <option value="free">Free</option>
+                        <option value="paid">Paid</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Search Results Dropdown */}
+              {showSearchResults && searchResults.length > 0 && (
+                <div className="absolute left-0 mt-1 w-full bg-white rounded-lg shadow-lg py-2 z-50 max-h-80 overflow-y-auto">
+                  {searchResults.map((course) => (
+                    <Link
+                      key={course.id}
+                      href={`/courses/${course.id}`}
+                      className="flex items-center px-4 py-2 hover:bg-gray-100"
+                      onClick={() => {
+                        setShowSearchResults(false);
+                        setSearchTerm("");
+                      }}
+                    >
+                      <div className="flex-shrink-0 w-10 h-10 bg-gray-200 rounded-md overflow-hidden">
+                        {course.thumbnail?.url && (
+                          <img
+                            src={`${
+                              process.env.NEXT_PUBLIC_STRAPI_URL ||
+                              "http://localhost:1337"
+                            }${course.thumbnail.url}`}
+                            alt={course.title}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.src = "/placeholder-course.jpg";
+                            }}
+                          />
+                        )}
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm font-medium text-gray-900">
+                          {course?.title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {course.isFree ? "Free" : "Paid"}
+                        </p>
+                      </div>
+                    </Link>
+                  ))}
+                  <button
+                    onClick={handleViewAllResults}
+                    className="block text-center text-sm font-medium text-purple-600 px-4 py-2 hover:bg-purple-50 w-full"
+                  >
+                    View all results ({searchResults.length})
+                  </button>
+                </div>
+              )}
             </div>
 
             {!user ? (
@@ -224,12 +436,154 @@ const Header = () => {
         {mobileMenuOpen && (
           <div className="md:hidden mt-4 pb-4 space-y-4">
             <div className="relative">
-              <input
-                type="text"
-                placeholder="Search courses..."
-                className="pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-full"
-              />
-              <FaSearch className="absolute left-3 top-3 text-gray-400" />
+              <form onSubmit={handleSearchSubmit}>
+                <input
+                  type="text"
+                  placeholder="Search courses..."
+                  className="pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-full"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onFocus={() => searchTerm && setShowSearchResults(true)}
+                  onBlur={() =>
+                    setTimeout(() => setShowSearchResults(false), 200)
+                  }
+                />
+                <FaSearch className="absolute left-3 top-3 text-gray-400" />
+              </form>
+
+              {/* Mobile Filter Button */}
+              <button
+                className="absolute right-3 top-3 text-gray-400 hover:text-purple-500"
+                onClick={() => setShowFilters(!showFilters)}
+              >
+                <FaFilter />
+              </button>
+
+              {/* Mobile Filter Panel */}
+              {showFilters && (
+                <div className="mt-2 bg-white rounded-lg shadow-lg py-2 px-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <h3 className="font-medium">Filters</h3>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={clearFilters}
+                        className="text-xs text-purple-600 hover:underline"
+                      >
+                        Clear all
+                      </button>
+                      <button
+                        onClick={() => setShowFilters(false)}
+                        className="text-gray-500 hover:text-gray-700"
+                      >
+                        <FaTimes />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Category
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.category}
+                        onChange={(e) =>
+                          setFilters({ ...filters, category: e.target.value })
+                        }
+                      >
+                        <option value="">All Categories</option>
+                        <option value="web-development">Web Development</option>
+                        <option value="data-science">Data Science</option>
+                        <option value="business">Business</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Level
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.level}
+                        onChange={(e) =>
+                          setFilters({ ...filters, level: e.target.value })
+                        }
+                      >
+                        <option value="">All Levels</option>
+                        <option value="beginner">Beginner</option>
+                        <option value="intermediate">Intermediate</option>
+                        <option value="advanced">Advanced</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Price
+                      </label>
+                      <select
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        value={filters.price}
+                        onChange={(e) =>
+                          setFilters({ ...filters, price: e.target.value })
+                        }
+                      >
+                        <option value="">All Prices</option>
+                        <option value="free">Free</option>
+                        <option value="paid">Paid</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Mobile Search Results */}
+              {showSearchResults && searchResults.length > 0 && (
+                <div className="mt-1 bg-white rounded-lg shadow-lg py-2 max-h-60 overflow-y-auto">
+                  {searchResults.map((course) => (
+                    <Link
+                      key={course.id}
+                      href={`/courses/${course.id}`}
+                      className="flex items-center px-4 py-2 hover:bg-gray-100"
+                      onClick={() => {
+                        setShowSearchResults(false);
+                        setSearchTerm("");
+                        setMobileMenuOpen(false);
+                      }}
+                    >
+                      <div className="flex-shrink-0 w-10 h-10 bg-gray-200 rounded-md overflow-hidden">
+                        {course.thumbnail?.url && (
+                          <img
+                            src={`${
+                              process.env.NEXT_PUBLIC_STRAPI_URL ||
+                              "http://localhost:1337"
+                            }${course.thumbnail.url}`}
+                            alt={course.title}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.src = "/placeholder-course.jpg";
+                            }}
+                          />
+                        )}
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm font-medium text-gray-900">
+                          {course?.title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {course?.isFree ? "isFree" : "Paid"}
+                        </p>
+                      </div>
+                    </Link>
+                  ))}
+                  <button
+                    onClick={handleViewAllResults}
+                    className="block text-center text-sm font-medium text-purple-600 px-4 py-2 hover:bg-purple-50 w-full"
+                  >
+                    View all results ({searchResults.length})
+                  </button>
+                </div>
+              )}
             </div>
 
             <nav className="flex flex-col space-y-3">

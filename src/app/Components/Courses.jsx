@@ -61,7 +61,7 @@ const Courses = () => {
 
       if (searchTerm) params["filters[title][$containsi]"] = searchTerm;
       if (filters.category) params["filters[category][$eq]"] = filters.category;
-      if (filters.level) params["filters[Level][$eq]"] = filters.level;
+      if (filters.level) params["filters[level][$eq]"] = filters.level;
       if (filters.price === "free") params["filters[isFree][$eq]"] = true;
       if (filters.price === "paid") params["filters[isFree][$eq]"] = false;
 
@@ -220,7 +220,7 @@ const Courses = () => {
                     className="w-full p-2 border border-gray-300 rounded-md"
                   >
                     <option value="">All Levels</option>
-                    <option value="Beginner">Beginner</option>
+                    <option value="Beginners">Beginners</option>
                     <option value="Intermediate">Intermediate</option>
                     <option value="Advanced">Advanced</option>
                   </select>

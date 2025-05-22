@@ -14,6 +14,7 @@ export default function CoursePage() {
   const [user, setUser] = useState(null);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [shouldRedirect, setShouldRedirect] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   const courseId = params?.courseId;
 
@@ -21,7 +22,7 @@ export default function CoursePage() {
     try {
       const jwt = Cookies.get("jwt");
 
-      // Fetch course data
+      // Fetch course data with preview video populated
       const courseRes = await fetch(
         `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
         {
@@ -39,15 +40,12 @@ export default function CoursePage() {
         throw new Error("Course not found");
       }
 
-      // Extract attributes from the nested structure
       const raw = courseData.data[0];
       const attributes = raw;
       setCourse(attributes);
 
-      // Fetch user enrollment status if logged in
       if (jwt) {
         try {
-          // First get the user ID
           const userRes = await fetch(
             "http://localhost:1337/api/users/me?populate=*",
             {
@@ -60,7 +58,6 @@ export default function CoursePage() {
           const userData = await userRes.json();
           setUser(userData);
 
-          // Then check if user is enrolled in this course
           const enrollmentRes = await fetch(
             `http://localhost:1337/api/enrolled-courses?filters[users_permissions_users][id][$eq]=${userData.id}&filters[courses][id][$eq]=${courseId}`
           );
@@ -160,6 +157,10 @@ export default function CoursePage() {
     ? `http://localhost:1337${course.thumbnail.url}`
     : null;
 
+  const previewVideoUrl = course?.previewVideo?.[0]?.url
+    ? `http://localhost:1337${course.previewVideo[0].url}`
+    : null;
+
   const formatDate = (dateString) => {
     const options = { year: "numeric", month: "long", day: "numeric" };
     return new Date(dateString).toLocaleDateString(undefined, options);
@@ -190,6 +191,71 @@ export default function CoursePage() {
           </div>
         </div>
       </div>
+
+      {/* Preview Section for Paid Courses */}
+      {!course?.isFree && previewVideoUrl && (
+        <div className="bg-white rounded-xl p-4 mb-6 shadow-sm border border-gray-100">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-xl font-bold text-gray-800">Course Preview</h2>
+            {!showPreview && (
+              <button
+                onClick={() => setShowPreview(true)}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Show Preview
+              </button>
+            )}
+          </div>
+
+          {showPreview ? (
+            <div className="relative pt-[56.25%] rounded-lg overflow-hidden bg-black">
+              <video
+                controls
+                className="absolute top-0 left-0 w-full h-full"
+                poster={thumbnailUrl}
+              >
+                <source src={previewVideoUrl} type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+            </div>
+          ) : (
+            <div
+              className="relative pt-[56.25%] rounded-lg overflow-hidden bg-gray-900 cursor-pointer"
+              onClick={() => setShowPreview(true)}
+            >
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white p-4 text-center">
+                <svg
+                  className="w-12 h-12 mb-3 text-blue-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <h3 className="text-lg font-bold mb-1">Preview Locked</h3>
+                <p className="text-sm mb-3">Click to watch a free preview</p>
+                <button
+                  onClick={() => setShowPreview(true)}
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                >
+                  Watch Preview
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-8">
         {/* Main Content */}
@@ -229,8 +295,7 @@ export default function CoursePage() {
                   Instructor
                 </h3>
                 <p className="text-gray-600">
-                  {course?.instructor?.firstName || "Not specified"}{" "}
-                  {course?.instructor?.lastName || ""}
+                  {course?.instructor || "Not specified"}{" "}
                 </p>
               </div>
               <div>
