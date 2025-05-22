@@ -1,0 +1,414 @@
+"use client";
+import { useState, useEffect } from "react";
+import { useRouter, useParams } from "next/navigation";
+import Cookies from "js-cookie";
+import { toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+
+export default function CoursePage() {
+  const router = useRouter();
+  const params = useParams();
+  const [isLoading, setIsLoading] = useState(true);
+  const [course, setCourse] = useState(null);
+  const [error, setError] = useState(null);
+  const [user, setUser] = useState(null);
+  const [isEnrolled, setIsEnrolled] = useState(false);
+
+  const courseId = params?.courseId;
+
+  const fetchCourseData = async () => {
+    try {
+      const jwt = Cookies.get("jwt");
+
+      const res = await fetch(
+        `http://localhost:1337/api/courses?filters[id][$eq]=${courseId}&populate=*`,
+        {
+          headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
+        }
+      );
+
+      if (!res.ok) throw new Error(`Failed to fetch course: ${res.status}`);
+
+      const data = await res.json();
+      console.log("Course data from API:", data);
+
+      if (!data.data || !data.data.length) {
+        throw new Error("Course not found");
+      }
+
+      const raw = data.data[0];
+      const attributes = raw;
+      setCourse(attributes);
+
+      if (jwt) {
+        const userRes = await fetch("http://localhost:1337/api/users/me", {
+          headers: { Authorization: `Bearer ${jwt}` },
+        });
+        if (!userRes.ok) throw new Error("Failed to fetch user");
+
+        const userData = await userRes.json();
+        setUser(userData);
+        setIsEnrolled(userData.enrolled_courses?.includes(raw.id));
+      }
+
+      setIsLoading(false);
+    } catch (err) {
+      console.error("Error:", err);
+      setError(err.message);
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!courseId) {
+      setError("Missing course ID");
+      setIsLoading(false);
+    } else {
+      fetchCourseData();
+    }
+  }, [courseId]);
+
+  const handleEnroll = async () => {
+    if (!course?.documentId || !user?.id) {
+      toast.error("Missing course or user info");
+      return;
+    }
+
+    const jwt = Cookies.get("jwt");
+    if (!jwt) {
+      router.push(`/login?returnUrl=/courses/${courseId}`);
+      return;
+    }
+    if (course.price > 0) {
+      toast.info("Paid course detected, redirecting to payment page...");
+      router.push(`/payment/${courseId}`);
+      return;
+    }
+    setIsLoading(true);
+
+    try {
+      const res = await fetch("http://localhost:1337/api/enrolled-courses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({
+          data: {
+            users_permissions_users: user.id,
+            courses: [course.documentId],
+            enrolledAt: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok)
+        throw new Error(result.error?.message || "Enrollment failed");
+
+      toast.success("Successfully enrolled!");
+      setIsEnrolled(true);
+      fetchCourseData();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading) return <p className="text-center mt-10">Loading...</p>;
+  if (error) return <p className="text-center mt-10 text-red-600">{error}</p>;
+
+  const thumbnailUrl = course?.thumbnail?.url
+    ? `http://localhost:1337${course.thumbnail.url}`
+    : null;
+
+  const formatDate = (dateString) => {
+    const options = { year: "numeric", month: "long", day: "numeric" };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+
+  return (
+    <div className="container mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="relative mb-12 mt-20">
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl opacity-10 pointer-events-none" />
+        <div className="relative bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
+          {thumbnailUrl ? (
+            <img
+              src={thumbnailUrl}
+              alt={course.title}
+              className="w-full h-64 object-cover"
+            />
+          ) : (
+            <div className="w-full h-64 bg-gray-200 flex items-center justify-center">
+              <span className="text-gray-500">No thumbnail available</span>
+            </div>
+          )}
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6">
+            <h1 className="text-3xl md:text-4xl font-bold text-white">
+              {course?.title}
+            </h1>
+            <p className="text-gray-200 mt-2">{course?.shortDescription}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-8">
+        {/* Main Content */}
+        <div className="lg:w-2/3">
+          {/* Course Metadata */}
+          <div className="flex flex-wrap gap-3 mb-8">
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+              {course?.category || "Uncategorized"}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
+              {course?.difficultyLevel || "All Levels"}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+              {course?.isFree ? "Free" : `$${course?.price}`}
+            </span>
+            {course?.hasCertificate && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                Certificate Available
+              </span>
+            )}
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800">
+              {course?.language?.toUpperCase() || "EN"}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-pink-100 text-pink-800">
+              {course?.durationHours || 0} hours
+            </span>
+          </div>
+
+          {/* Course Details */}
+          <div className="bg-white rounded-xl p-6 mb-8 shadow-sm border border-gray-100">
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">
+              Course Details
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Instructor
+                </h3>
+                <p className="text-gray-600">
+                  {course?.instructor || "Not specified"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Students
+                </h3>
+                <p className="text-gray-600">
+                  {course?.students || 0} enrolled
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Rating
+                </h3>
+                <div className="flex items-center">
+                  <span className="text-yellow-500 mr-1">⭐</span>
+                  <span>{course?.rating || 0}/5</span>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Level
+                </h3>
+                <p className="text-gray-600">
+                  {course?.difficultyLevel || "Not specified"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Published
+                </h3>
+                <p className="text-gray-600">
+                  {course?.publishedAt
+                    ? formatDate(course.publishedAt)
+                    : "Not available"}
+                </p>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  Last Updated
+                </h3>
+                <p className="text-gray-600">
+                  {course?.updatedAt
+                    ? formatDate(course.updatedAt)
+                    : "Not available"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Description */}
+          <div className="bg-white rounded-xl p-6 mb-8 shadow-sm border border-gray-100">
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">
+              About This Course
+            </h2>
+            {Array.isArray(course?.description) ? (
+              <div className="prose max-w-none text-gray-600">
+                {course.description.map((block, index) => (
+                  <p key={index} className="mb-4">
+                    {block.children?.[0]?.text || JSON.stringify(block)}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-600">
+                {course?.description || "No description provided."}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <div className="lg:w-1/3">
+          <div className="bg-white p-6 rounded-xl shadow-lg sticky top-6 border border-gray-100">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-2xl font-bold text-gray-900">
+                {course?.isFree ? "Free" : `$${course?.price || 0}`}
+              </h3>
+              {course?.discountedPrice && (
+                <span className="text-sm text-gray-500 line-through">
+                  ${course.discountedPrice}
+                </span>
+              )}
+              {isEnrolled && (
+                <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-sm">
+                  Enrolled
+                </span>
+              )}
+            </div>
+
+            {!isEnrolled ? (
+              <button
+                onClick={handleEnroll}
+                disabled={isLoading}
+                className={`w-full py-3 ${
+                  course?.isFree
+                    ? "bg-blue-600 hover:bg-blue-700"
+                    : "bg-purple-600 hover:bg-purple-700"
+                } text-white rounded-lg font-medium transition mb-6 ${
+                  isLoading ? "opacity-70 cursor-not-allowed" : "cursor-pointer"
+                }`}
+              >
+                {isLoading
+                  ? "Processing..."
+                  : course?.isFree
+                  ? "Enroll for Free"
+                  : `Enroll for $${course?.price}`}
+              </button>
+            ) : (
+              <button
+                onClick={() => router.push(`/learning/${courseId}`)}
+                className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition mb-6"
+              >
+                Continue Learning
+              </button>
+            )}
+
+            <div className="space-y-5">
+              {/* Course Includes */}
+              <div>
+                <h4 className="text-lg font-semibold text-gray-800 mb-2">
+                  This Course Includes
+                </h4>
+                <ul className="space-y-3">
+                  <li className="flex items-start gap-2 text-gray-600">
+                    <svg
+                      className="w-5 h-5 mt-0.5 text-green-500 flex-shrink-0"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M5 13l4 4L19 7"
+                      ></path>
+                    </svg>
+                    <span>
+                      <strong>{course?.durationHours || 0} hours</strong> of
+                      content
+                    </span>
+                  </li>
+                  {course?.hasCertificate && (
+                    <li className="flex items-start gap-2 text-gray-600">
+                      <svg
+                        className="w-5 h-5 mt-0.5 text-green-500 flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M5 13l4 4L19 7"
+                        ></path>
+                      </svg>
+                      <span>Certificate of completion</span>
+                    </li>
+                  )}
+                  <li className="flex items-start gap-2 text-gray-600">
+                    <svg
+                      className="w-5 h-5 mt-0.5 text-green-500 flex-shrink-0"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M5 13l4 4L19 7"
+                      ></path>
+                    </svg>
+                    <span>Lifetime access</span>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Additional Info */}
+              <div className="border-t border-gray-200 pt-4">
+                <h4 className="text-lg font-semibold text-gray-800 mb-2">
+                  Additional Information
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-sm text-gray-500">Course ID</div>
+                    <div className="font-medium text-sm">
+                      {course?.documentId}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Created</div>
+                    <div className="font-medium text-sm">
+                      {course?.createdAt ? formatDate(course.createdAt) : "N/A"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Category</div>
+                    <div className="font-medium text-sm">
+                      {course?.category}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-500">Level</div>
+                    <div className="font-medium text-sm">
+                      {course?.difficultyLevel}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
