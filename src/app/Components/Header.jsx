@@ -571,7 +571,7 @@ const Header = () => {
                           {course?.title}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {course?.isFree ? "isFree" : "Paid"}
+                          {courser?.isFree ? "isFree" : "Paid"}
                         </p>
                       </div>
                     </Link>
